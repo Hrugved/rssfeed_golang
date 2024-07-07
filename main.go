@@ -1,14 +1,23 @@
 package main
 
 import (
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
+	"github.com/Hrugved/rssagg/internal/database"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
 	"github.com/joho/godotenv"
+
+	_ "github.com/lib/pq"
 )
+
+type apiConfig struct {
+	DB *database.Queries
+}
 
 func main() {
 
@@ -17,6 +26,23 @@ func main() {
 	if portString == "" {
 		log.Fatal("PORT is not found in the enviornment")
 	}
+
+	dbUrl := os.Getenv("DB_URL")
+	if dbUrl == "" {
+		log.Fatal("DB_URL is not found in the enviornment")
+	}
+
+	conn, err := sql.Open("postgres", dbUrl)
+	if err != nil {
+		log.Fatal("Can't connect to database")
+	}
+
+	db := database.New(conn)
+	apiCgf := apiConfig {
+		DB: db,
+	}
+
+	go startScrapping(db, 10, time.Minute)
 
 	router := chi.NewRouter()
 
@@ -32,6 +58,13 @@ func main() {
 	v1Router := chi.NewRouter()
 	v1Router.Get("/healthz", handlerReadiness)
 	v1Router.Get("/err", handlerErr)
+	v1Router.Post("/users", apiCgf.handlerCreateUser)
+	v1Router.Get("/users", apiCgf.middlewareAuth(apiCgf.handleGetUser))
+	v1Router.Post("/feeds", apiCgf.middlewareAuth(apiCgf.handlerCreateFeed))
+	v1Router.Get("/feeds", apiCgf.handlerGetFeeds)
+	v1Router.Post("/feed_follows", apiCgf.middlewareAuth(apiCgf.handlerFeedFollow))
+	v1Router.Get("/feed_follows", apiCgf.middlewareAuth(apiCgf.handlerGetFeedFollows))
+	v1Router.Delete("/feed_follows/{feedFollowID}", apiCgf.middlewareAuth(apiCgf.handlerDeleteFeedFollows))
 
 	router.Mount("/v1",v1Router)
 
@@ -42,7 +75,7 @@ func main() {
 
 	log.Printf("Server starting on port %v", portString)
 
-	err := srv.ListenAndServe()
+	err = srv.ListenAndServe()
 	if err != nil {
 		log.Fatal(err)
 	}
